@@ -260,7 +260,8 @@ export const userRouter = createTRPCRouter({
           })
           .execute();
 
-        await adjustTemperature();
+        // Only this user's bed, and apply the current stage right away if it is inside their sleep cycle.
+        await adjustTemperature(undefined, { onlyEmail: decoded.email, applyNow: true });
 
         return { success: true };
       } catch (error) {

@@ -182,12 +182,23 @@ interface TestMode {
   currentTime: Date;
 }
 
-export async function adjustTemperature(testMode?: TestMode): Promise<void> {
+interface AdjustOptions {
+  // When set, only this user's bed is handled (used when someone presses "Update Profile").
+  onlyEmail?: string;
+  // When true and the current time is inside the sleep cycle, apply the current stage's level now,
+  // even if it is not within 15 minutes of a stage time.
+  applyNow?: boolean;
+}
+
+export async function adjustTemperature(testMode?: TestMode, options?: AdjustOptions): Promise<void> {
   try {
-    const profiles = await db
+    const allProfiles = await db
       .select()
       .from(userTemperatureProfile)
       .innerJoin(users, eq(userTemperatureProfile.email, users.email));
+    const profiles = options?.onlyEmail
+      ? allProfiles.filter((p) => p.users.email.toLowerCase() === options.onlyEmail!.toLowerCase())
+      : allProfiles;
 
     for (const profile of profiles) {
       try {
@@ -271,12 +282,24 @@ export async function adjustTemperature(testMode?: TestMode): Promise<void> {
         // True when this run already handled the bed as part of the normal schedule.
         let actedOnSchedule = false;
 
-        if (isNearPreHeating || isNearBedTime || isNearMidStage || isNearFinalStage || isNearWakeup) {
+        const nearAnyStage = isNearPreHeating || isNearBedTime || isNearMidStage || isNearFinalStage || isNearWakeup;
+        // Update Profile pressed between stage times, but inside the sleep cycle: apply the current stage now.
+        const applyCurrentStageNow = !!options?.applyNow && !nearAnyStage && currentSleepStage !== "outside sleep cycle";
+
+        if (nearAnyStage || applyCurrentStageNow) {
           actedOnSchedule = true;
           let targetLevel: number;
           let sleepStage: string;
 
-          if (isNearPreHeating || (isNearBedTime && userNow < adjustedCycle.bedTime)) {
+          if (applyCurrentStageNow) {
+            sleepStage = currentSleepStage;
+            targetLevel =
+              currentSleepStage === "mid"
+                ? userTemperatureProfile.midStageSleepLevel
+                : currentSleepStage === "final"
+                  ? userTemperatureProfile.finalSleepLevel
+                  : userTemperatureProfile.initialSleepLevel;
+          } else if (isNearPreHeating || (isNearBedTime && userNow < adjustedCycle.bedTime)) {
             targetLevel = userTemperatureProfile.initialSleepLevel;
             sleepStage = "pre-heating";
           } else if (isNearBedTime || (isNearMidStage && userNow < adjustedCycle.midStageTime)) {
